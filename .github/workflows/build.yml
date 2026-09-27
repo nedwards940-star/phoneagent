@@ -25,8 +25,16 @@ jobs:
         run: |
           echo "y" | sdkmanager "platforms;android-34" "build-tools;34.0.0"
 
+      - name: Install Gradle
+        run: |
+          GRADLE_VERSION=8.7
+          curl -sL https://services.gradle.org/distributions/gradle-${GRADLE_VERSION}-bin.zip -o /tmp/gradle.zip
+          unzip -q /tmp/gradle.zip -d /opt
+          ln -sf /opt/gradle-${GRADLE_VERSION}/bin/gradle /usr/local/bin/gradle
+          gradle --version
+
       - name: Build debug APK
-        run: ./gradlew :app:assembleDebug --no-daemon
+        run: gradle :app:assembleDebug --no-daemon
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
