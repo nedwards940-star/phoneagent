@@ -161,17 +161,19 @@ class MainActivity : ComponentActivity() {
             }
         })
 
-        root.addView(downloadBtn = Button(this).apply {
+        downloadBtn = Button(this).apply {
             text = "4. Download Gemma model (Hugging Face)"
             setOnClickListener { startModelDownload() }
-        })
+        }
+        root.addView(downloadBtn)
 
-        root.addView(pickBtn = Button(this).apply {
+        pickBtn = Button(this).apply {
             text = "4b. Pick model file manually (fallback)"
             setOnClickListener {
                 modelPickerLauncher.launch(arrayOf("*/*"))
             }
-        })
+        }
+        root.addView(pickBtn)
 
         modelStatusText = TextView(this)
         root.addView(modelStatusText)
