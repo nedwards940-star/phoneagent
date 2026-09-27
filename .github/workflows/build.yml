@@ -27,6 +27,7 @@ jobs:
 
       - name: Install Gradle
         run: |
+          apt-get update -qq && apt-get install -y -qq unzip
           GRADLE_VERSION=8.7
           curl -sL https://services.gradle.org/distributions/gradle-${GRADLE_VERSION}-bin.zip -o /tmp/gradle.zip
           unzip -q /tmp/gradle.zip -d /opt
