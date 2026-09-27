@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Phone Agent</string>
+    <string name="accessibility_service_description">
+        Allows Phone Agent to read screen content and simulate taps/swipes so it can
+        play games and automate tasks on your behalf. You must explicitly enable this
+        in Settings -> Accessibility, and can revoke it at any time.
+    </string>
+</resources>
