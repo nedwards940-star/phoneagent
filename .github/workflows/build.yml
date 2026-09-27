@@ -16,10 +16,6 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - uses: nttld/setup-ninja@v1
-        with:
-          ninja-version: '1.11.1'
-
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 

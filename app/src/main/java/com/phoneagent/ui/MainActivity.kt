@@ -18,12 +18,24 @@ import androidx.core.content.ContextCompat
 import com.phoneagent.controller.AgentController
 import com.phoneagent.service.AgentAccessibilityService
 import com.phoneagent.service.ScreenCaptureService
+import com.phoneagent.voice.GemmaModelDownloader
 import com.phoneagent.voice.LocalGemmaBrain
 import com.phoneagent.voice.VoiceInteractionManager
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import java.io.File
 
 /**
  * Setup + control screen.
+ *
+ * Model sourcing (in priority order):
+ *   1. Automatic download from Hugging Face via GemmaModelDownloader
+ *   2. Manual pick from Downloads via system file picker (fallback)
+ *
+ * On app start, checks whether a model update is available and downloads it
+ * automatically if the remote file size differs from the local one.
  */
 class MainActivity : ComponentActivity() {
 
@@ -33,9 +45,16 @@ class MainActivity : ComponentActivity() {
     private lateinit var logText: TextView
     private var activeController: AgentController? = null
     private var localBrain: LocalGemmaBrain? = null
+    private val downloader = GemmaModelDownloader(this)
+    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+
+    // Button references for enabling/disabling the model download buttons
+    private var downloadBtn: Button? = null
+    private var pickBtn: Button? = null
 
     private val localModelFile: File
-        get() = File(filesDir, "gemma3n.task")
+        get() = downloader.getLocalModelPath()?.let { File(it) }
+              ?: File(filesDir, "gemma-3n-E2B-it-int4.task")
 
     private val micPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -74,6 +93,40 @@ class MainActivity : ComponentActivity() {
         voice = VoiceInteractionManager(this)
         voice.initialize { appendLog("Voice engine ready") }
 
+        // Auto-update: check for newer model on startup (background, non-blocking)
+        scope.launch(Dispatchers.IO) {
+            try {
+                val updated = downloader.checkAndAutoUpdate(
+                    onProgress = { downloaded, total ->
+                        runOnUiThread {
+                            modelStatusText.text = "Model: updating... ${downloaded / 1_000_000} / ${total / 1_000_000} MB"
+                        }
+                    },
+                    onError = { error ->
+                        runOnUiThread { appendLog("Auto-update check: $error") }
+                    }
+                )
+                if (updated) {
+                    runOnUiThread {
+                        appendLog("Model auto-updated from Hugging Face")
+                        updateModelStatus()
+                    }
+                } else if (!downloader.hasModel()) {
+                    runOnUiThread {
+                        appendLog("No model found - use the download button or pick manually")
+                        updateModelStatus()
+                    }
+                } else {
+                    runOnUiThread {
+                        appendLog("Model is up to date")
+                        updateModelStatus()
+                    }
+                }
+            } catch (e: Exception) {
+                runOnUiThread { appendLog("Auto-update check failed: ${e.message}") }
+            }
+        }
+
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(48, 96, 48, 48)
@@ -108,19 +161,19 @@ class MainActivity : ComponentActivity() {
             }
         })
 
-        root.addView(Button(this).apply {
-            text = "4. Pick Gemma model file (.task)"
+        root.addView(downloadBtn = Button(this).apply {
+            text = "4. Download Gemma model (Hugging Face)"
+            setOnClickListener { startModelDownload() }
+        })
+
+        root.addView(pickBtn = Button(this).apply {
+            text = "4b. Pick model file manually (fallback)"
             setOnClickListener {
                 modelPickerLauncher.launch(arrayOf("*/*"))
             }
         })
 
-        modelStatusText = TextView(this).apply {
-            text = if (localModelFile.exists())
-                "Model: ready (${localModelFile.length() / 1_000_000} MB)"
-            else
-                "Model: not loaded yet - use step 4"
-        }
+        modelStatusText = TextView(this)
         root.addView(modelStatusText)
 
         root.addView(Button(this).apply {
@@ -139,31 +192,93 @@ class MainActivity : ComponentActivity() {
             }
         })
 
+        root.addView(Button(this).apply {
+            text = "Delete model & free space"
+            setOnClickListener {
+                downloader.deleteModel()
+                appendLog("Model file deleted")
+                updateModelStatus()
+                voice.speak("Model deleted.")
+            }
+        })
+
         logText = TextView(this).apply { text = "" }
         root.addView(ScrollView(this).apply { addView(logText) })
 
         setContentView(root)
+        updateModelStatus()
+    }
+
+    private fun updateModelStatus() {
+        val has = downloader.hasModel()
+        val sizeMB = if (has) downloader.localSizeBytes() / 1_000_000 else 0
+        modelStatusText.text = if (has)
+            "Model: ready (${sizeMB} MB) — auto-updates from Hugging Face"
+        else
+            "Model: not loaded — tap 'Download Gemma model' or pick manually"
+    }
+
+    private fun startModelDownload() {
+        if (!downloader.hasModel()) {
+            appendLog("Downloading Gemma 3n from Hugging Face...")
+        } else {
+            appendLog("Model already present. Tap again to re-download (auto-update).")
+        }
+        setModelButtonEnabled(false, "Downloading...")
+        scope.launch(Dispatchers.IO) {
+            downloader.download(
+                onProgress = { downloaded, total ->
+                    runOnUiThread {
+                        val totalStr = if (total > 0) " / ${total / 1_000_000} MB" else " (size unknown)"
+                        modelStatusText.text = "Model: downloading... ${downloaded / 1_000_000} MB$totalStr"
+                    }
+                },
+                onError = { error ->
+                    runOnUiThread {
+                        appendLog("Download failed: $error")
+                        setModelButtonEnabled(true, "4. Download Gemma model (Hugging Face)")
+                        updateModelStatus()
+                    }
+                },
+                onComplete = {
+                    runOnUiThread {
+                        appendLog("Model downloaded successfully from Hugging Face")
+                        setModelButtonEnabled(true, "4. Download Gemma model (Hugging Face)")
+                        updateModelStatus()
+                    }
+                }
+            )
+        }
+    }
+
+    private fun setModelButtonEnabled(enabled: Boolean, text: String) {
+        runOnUiThread {
+            downloadBtn?.isEnabled = enabled
+            downloadBtn?.text = text
+            pickBtn?.isEnabled = enabled
+        }
     }
 
     private fun copyModelFileIntoAppStorage(sourceUri: Uri) {
-        appendLog("Copying model file - this can take a minute for a multi-GB file...")
-        Thread {
+        appendLog("Copying model file from picker - this can take a minute for a multi-GB file...")
+        scope.launch(Dispatchers.IO) {
             try {
                 contentResolver.openInputStream(sourceUri)?.use { input ->
-                    localModelFile.outputStream().use { output ->
+                    val dest = File(filesDir, "gemma-3n-E2B-it-int4.task")
+                    dest.outputStream().use { output ->
                         input.copyTo(output)
                     }
                 }
                 runOnUiThread {
-                    modelStatusText.text = "Model: ready (${localModelFile.length() / 1_000_000} MB)"
                     appendLog("Model copied successfully to app storage")
+                    updateModelStatus()
                 }
             } catch (e: Exception) {
                 runOnUiThread {
                     appendLog("Failed to copy model file: ${e.message}")
                 }
             }
-        }.start()
+        }
     }
 
     private fun startListeningForTask() {
@@ -177,9 +292,9 @@ class MainActivity : ComponentActivity() {
             voice.speak("Please start screen capture first.")
             return
         }
-        if (!localModelFile.exists()) {
-            appendLog("Can't start - pick the model file first (step 4)")
-            voice.speak("Please pick the model file first.")
+        if (!downloader.hasModel()) {
+            appendLog("Can't start - download or pick the model file first (step 4)")
+            voice.speak("Please get the model file first.")
             return
         }
 
@@ -203,7 +318,11 @@ class MainActivity : ComponentActivity() {
         localBrain?.close()
 
         appendLog("Loading on-device model (first run after boot may take a moment)...")
-        val brain = LocalGemmaBrain(context = this, goal = goal, modelPath = localModelFile.absolutePath)
+        val brain = LocalGemmaBrain(
+            context = this,
+            goal = goal,
+            modelPath = downloader.getLocalModelPath() ?: return
+        )
         localBrain = brain
 
         val controller = AgentController(
