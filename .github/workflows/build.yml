@@ -17,7 +17,13 @@ jobs:
           java-version: '17'
 
       - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
+        with:
+          packages: ''
+
+      - name: Install Android platform and build-tools
+        run: |
+          echo "y" | sdkmanager "platforms;android-34" "build-tools;34.0.0"
 
       - name: Build debug APK
         run: ./gradlew :app:assembleDebug --no-daemon
